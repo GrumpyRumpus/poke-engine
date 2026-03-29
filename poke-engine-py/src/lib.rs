@@ -22,6 +22,22 @@ use poke_engine::state::{
 use std::str::FromStr;
 use std::time::Duration;
 
+/// Normalize common Pokemon status abbreviations to the canonical names
+/// that PokemonStatus::from_str expects. Handles Showdown-style short forms
+/// like "slp", "brn", "par", "frz", "psn", "tox".
+fn normalize_status(s: &str) -> String {
+    match s.to_uppercase().as_str() {
+        "SLP" | "SLEEP" => "SLEEP".to_string(),
+        "BRN" | "BURN" => "BURN".to_string(),
+        "PAR" | "PRZ" | "PARALYSIS" | "PARALYZE" | "PARALYZED" => "PARALYZE".to_string(),
+        "FRZ" | "FREEZE" | "FROZEN" => "FREEZE".to_string(),
+        "PSN" | "POISON" | "POISONED" => "POISON".to_string(),
+        "TOX" | "TOXIC" | "BADLY POISONED" => "TOXIC".to_string(),
+        "NONE" | "" => "NONE".to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn movechoice_to_string(side: &Side, move_choice: &MoveChoice) -> String {
     match move_choice {
         MoveChoice::Switch(_) => {
@@ -667,7 +683,7 @@ impl Into<Pokemon> for PyPokemon {
             special_attack: self.special_attack,
             special_defense: self.special_defense,
             speed: self.speed,
-            status: PokemonStatus::from_str(&self.status).unwrap(),
+            status: PokemonStatus::from_str(&normalize_status(&self.status)).unwrap(),
             rest_turns: self.rest_turns,
             sleep_turns: self.sleep_turns,
             weight_kg: self.weight_kg,
