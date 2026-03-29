@@ -3,7 +3,7 @@ use super::state::PokemonVolatileStatus;
 use crate::choices::MoveCategory;
 use crate::state::{Pokemon, PokemonStatus, State};
 
-const POKEMON_ALIVE: f32 = 30.0;
+const POKEMON_ALIVE: f32 = 60.0;
 const POKEMON_HP: f32 = 100.0;
 
 const POKEMON_ATTACK_BOOST: f32 = 30.0;
@@ -41,7 +41,7 @@ const REFLECT: f32 = 20.0;
 const LIGHT_SCREEN: f32 = 20.0;
 const SAFE_GUARD: f32 = 5.0;
 
-const SPIKES: f32 = -7.0;
+const SPIKES: f32 = -12.0;
 
 fn evaluate_burned(pokemon: &Pokemon) -> f32 {
     // burn is not as punishing in certain situations
@@ -80,6 +80,15 @@ fn get_boost_multiplier(boost: i8) -> f32 {
     }
 }
 
+fn has_sleep_talk(pokemon: &Pokemon) -> bool {
+    for mv in pokemon.moves.into_iter() {
+        if mv.id == crate::choices::Choices::SLEEPTALK {
+            return true;
+        }
+    }
+    false
+}
+
 fn evaluate_pokemon(pokemon: &Pokemon) -> f32 {
     let mut score = 0.0;
     score += POKEMON_HP * pokemon.hp as f32 / pokemon.maxhp as f32;
@@ -87,7 +96,14 @@ fn evaluate_pokemon(pokemon: &Pokemon) -> f32 {
     match pokemon.status {
         PokemonStatus::BURN => score += evaluate_burned(pokemon),
         PokemonStatus::FREEZE => score += POKEMON_FROZEN,
-        PokemonStatus::SLEEP => score += POKEMON_ASLEEP,
+        PokemonStatus::SLEEP => {
+            // sleep is much less punishing with Sleep Talk
+            if has_sleep_talk(pokemon) {
+                score += POKEMON_ASLEEP * 0.4;
+            } else {
+                score += POKEMON_ASLEEP;
+            }
+        }
         PokemonStatus::PARALYZE => score += POKEMON_PARALYZED,
         PokemonStatus::TOXIC => score += POKEMON_TOXIC,
         PokemonStatus::POISON => score += POKEMON_POISONED,
