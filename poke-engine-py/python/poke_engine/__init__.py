@@ -159,6 +159,28 @@ def monte_carlo_tree_search(state: State, duration_ms: int = 1000) -> MctsResult
     return MctsResult._from_rust(mcts(state, duration_ms))
 
 
+def monte_carlo_tree_search_multi(
+    states: list, duration_ms: int = 1000
+) -> MctsResult:
+    """
+    Perform MCTS over multiple sampled opponent states (root parallelization).
+
+    Shares a single search tree but round-robins through the states each batch
+    of iterations. This averages over uncertainty about the opponent's team
+    without splitting the search budget.
+
+    All states must have the same side_one and available moves.
+
+    :param states: list of State objects (different opponent team samples)
+    :type states: list[State]
+    :param duration_ms: time in milliseconds to run the search
+    :type duration_ms: int
+    :return: the result of the search
+    :rtype: MctsResult
+    """
+    return MctsResult._from_rust(mcts_multi(states, duration_ms))
+
+
 def iterative_deepening_expectiminimax(
     state: State, duration_ms: int = 1000
 ) -> IterativeDeepeningResult:

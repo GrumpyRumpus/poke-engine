@@ -302,3 +302,80 @@ pub fn perform_mcts(
 
     result
 }
+
+/// MCTS over multiple sampled opponent states.
+///
+/// Shares a single search tree but randomly picks which state to simulate
+/// each batch of iterations. This naturally averages over uncertainty about
+/// the opponent's team without splitting the search budget.
+///
+/// All states must have the same side_one (our team) and same available moves.
+/// They differ only in side_two (the opponent's unrevealed Pokemon).
+pub fn perform_mcts_multi(
+    states: &mut Vec<State>,
+    side_one_options: Vec<MoveChoice>,
+    side_two_options: Vec<MoveChoice>,
+    max_time: Duration,
+) -> MctsResult {
+    if states.is_empty() {
+        panic!("perform_mcts_multi called with empty states");
+    }
+    if states.len() == 1 {
+        return perform_mcts(&mut states[0], side_one_options, side_two_options, max_time);
+    }
+
+    let mut root_node = Node::new();
+    unsafe {
+        root_node.populate(side_one_options, side_two_options);
+    }
+    root_node.root = true;
+
+    // average root eval across all states
+    let root_eval: f32 = states.iter().map(|s| evaluate(s)).sum::<f32>() / states.len() as f32;
+
+    let n_states = states.len();
+    let start_time = std::time::Instant::now();
+    let mut state_idx = 0;
+
+    while start_time.elapsed() < max_time {
+        // round-robin: each batch of 1000 iterations uses the next state
+        // guarantees equal coverage across all sampled opponent teams
+        let state = &mut states[state_idx];
+        for _ in 0..1000 {
+            do_mcts(&mut root_node, state, &root_eval);
+        }
+        state_idx = (state_idx + 1) % n_states;
+
+        if root_node.times_visited == 10_000_000 {
+            break;
+        }
+    }
+
+    let result = MctsResult {
+        s1: root_node
+            .s1_options
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|v| MctsSideResult {
+                move_choice: v.move_choice.clone(),
+                total_score: v.total_score,
+                visits: v.visits,
+            })
+            .collect(),
+        s2: root_node
+            .s2_options
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|v| MctsSideResult {
+                move_choice: v.move_choice.clone(),
+                total_score: v.total_score,
+                visits: v.visits,
+            })
+            .collect(),
+        iteration_count: root_node.times_visited,
+    };
+
+    result
+}
