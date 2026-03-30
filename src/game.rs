@@ -1,9 +1,9 @@
-use crate::engine::evaluate::evaluate;
 use crate::engine::generate_instructions::generate_instructions_from_move_pair;
-use crate::mcts::{perform_mcts, MctsResult};
+use crate::mcts::perform_mcts;
 use crate::state::State;
 use rand::prelude::*;
 use rand::rng;
+use rayon::prelude::*;
 use std::time::Duration;
 
 /// Result of a completed game.
@@ -109,7 +109,9 @@ pub fn play_game(
     }
 }
 
-/// Play multiple games and return (s1_wins, s2_wins, draws).
+/// Play multiple games in parallel and return (s1_wins, s2_wins, draws).
+///
+/// Uses rayon to run games across all available CPU cores.
 pub fn play_games(
     state_template: &State,
     n_games: u32,
@@ -117,14 +119,20 @@ pub fn play_games(
     s2_search_ms: u64,
     max_turns: u32,
 ) -> (u32, u32, u32) {
+    let results: Vec<f32> = (0..n_games)
+        .into_par_iter()
+        .map(|_| {
+            let mut state = state_template.clone();
+            let result = play_game(&mut state, s1_search_ms, s2_search_ms, max_turns);
+            result.winner
+        })
+        .collect();
+
     let mut s1_wins = 0u32;
     let mut s2_wins = 0u32;
     let mut draws = 0u32;
-
-    for _ in 0..n_games {
-        let mut state = state_template.clone();
-        let result = play_game(&mut state, s1_search_ms, s2_search_ms, max_turns);
-        match result.winner {
+    for w in results {
+        match w {
             w if w > 0.0 => s1_wins += 1,
             w if w < 0.0 => s2_wins += 1,
             _ => draws += 1,
