@@ -11,6 +11,7 @@ use poke_engine::engine::generate_instructions::{
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Terrain, Weather};
 use poke_engine::instruction::{Instruction, StateInstructions};
+use poke_engine::game::{play_game, play_games};
 use poke_engine::mcts::{perform_mcts, perform_mcts_multi, MctsResult, MctsSideResult};
 use poke_engine::pokemon::PokemonName;
 use poke_engine::search::iterative_deepen_expectiminimax;
@@ -1112,6 +1113,20 @@ fn calculate_damage(
     Ok((s1_py_rolls, s2_py_rolls))
 }
 
+#[pyfunction]
+#[pyo3(signature = (py_state, n_games=10, s1_search_ms=500, s2_search_ms=50, max_turns=100))]
+fn run_games(
+    py_state: PyState,
+    n_games: u32,
+    s1_search_ms: u64,
+    s2_search_ms: u64,
+    max_turns: u32,
+) -> PyResult<(u32, u32, u32)> {
+    let state: State = py_state.into();
+    let (s1_wins, s2_wins, draws) = play_games(&state, n_games, s1_search_ms, s2_search_ms, max_turns);
+    Ok((s1_wins, s2_wins, draws))
+}
+
 #[pymodule]
 #[pyo3(name = "poke_engine")]
 fn py_poke_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1120,6 +1135,7 @@ fn py_poke_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(id, m)?)?;
     m.add_function(wrap_pyfunction!(mcts, m)?)?;
     m.add_function(wrap_pyfunction!(mcts_multi, m)?)?;
+    m.add_function(wrap_pyfunction!(run_games, m)?)?;
     m.add_class::<PyState>()?;
     m.add_class::<PySide>()?;
     m.add_class::<PySideConditions>()?;
