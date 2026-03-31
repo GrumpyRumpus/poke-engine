@@ -159,6 +159,28 @@ def monte_carlo_tree_search(state: State, duration_ms: int = 1000) -> MctsResult
     return MctsResult._from_rust(mcts(state, duration_ms))
 
 
+def monte_carlo_tree_search_with_priors(
+    state: State,
+    s1_priors: list,
+    s2_priors: list,
+    duration_ms: int = 1000,
+) -> MctsResult:
+    """
+    MCTS with policy net priors (PUCT selection).
+
+    Priors bias the search toward moves the policy net thinks are good.
+    Each prior list should match the number of available moves for that side.
+
+    :param state: the state to search through
+    :param s1_priors: prior probabilities for side_one's moves
+    :param s2_priors: prior probabilities for side_two's moves
+    :param duration_ms: time in milliseconds
+    :return: the result of the search
+    :rtype: MctsResult
+    """
+    return MctsResult._from_rust(mcts_with_priors(state, s1_priors, s2_priors, duration_ms))
+
+
 def monte_carlo_tree_search_multi(
     states: list, duration_ms: int = 1000
 ) -> MctsResult:

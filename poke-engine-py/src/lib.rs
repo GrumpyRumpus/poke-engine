@@ -12,7 +12,8 @@ use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Terrain, Weather};
 use poke_engine::instruction::{Instruction, StateInstructions};
 use poke_engine::game::{play_game, play_games, play_games_recorded};
-use poke_engine::mcts::{perform_mcts, perform_mcts_multi, MctsResult, MctsSideResult};
+use poke_engine::engine::evaluate::evaluate;
+use poke_engine::mcts::{perform_mcts, perform_mcts_multi, perform_mcts_with_priors, MctsResult, MctsSideResult};
 use poke_engine::pokemon::PokemonName;
 use poke_engine::search::iterative_deepen_expectiminimax;
 use poke_engine::state::{
@@ -933,6 +934,23 @@ fn mcts(py_state: PyState, duration_ms: u64) -> PyResult<PyMctsResult> {
 }
 
 #[pyfunction]
+fn mcts_with_priors(
+    py_state: PyState,
+    s1_priors: Vec<f32>,
+    s2_priors: Vec<f32>,
+    duration_ms: u64,
+) -> PyResult<PyMctsResult> {
+    let mut state: State = py_state.into();
+    let duration = Duration::from_millis(duration_ms);
+    let (s1_options, s2_options) = state.root_get_all_options();
+    let mcts_result = perform_mcts_with_priors(
+        &mut state, s1_options, s2_options, &s1_priors, &s2_priors, duration,
+    );
+    let py_mcts_result = PyMctsResult::from_mcts_result(mcts_result, &state);
+    Ok(py_mcts_result)
+}
+
+#[pyfunction]
 fn mcts_multi(py_states: Vec<PyState>, duration_ms: u64) -> PyResult<PyMctsResult> {
     if py_states.is_empty() {
         return Err(pyo3::exceptions::PyValueError::new_err("states list is empty"));
@@ -1161,6 +1179,7 @@ fn py_poke_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(generate_instructions, m)?)?;
     m.add_function(wrap_pyfunction!(id, m)?)?;
     m.add_function(wrap_pyfunction!(mcts, m)?)?;
+    m.add_function(wrap_pyfunction!(mcts_with_priors, m)?)?;
     m.add_function(wrap_pyfunction!(mcts_multi, m)?)?;
     m.add_function(wrap_pyfunction!(run_games, m)?)?;
     m.add_function(wrap_pyfunction!(run_games_recorded, m)?)?;

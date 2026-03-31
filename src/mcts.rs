@@ -30,6 +30,7 @@ pub struct Node {
     // de-coupled for s1 and s2
     pub s1_options: Option<Vec<MoveNode>>,
     pub s2_options: Option<Vec<MoveNode>>,
+    pub use_priors: bool,
 }
 
 impl Node {
@@ -44,15 +45,19 @@ impl Node {
             s2_choice: 0,
             s1_options: None,
             s2_options: None,
+            use_priors: false,
         }
     }
     unsafe fn populate(&mut self, s1_options: Vec<MoveChoice>, s2_options: Vec<MoveChoice>) {
+        let n_s1 = s1_options.len() as f32;
+        let n_s2 = s2_options.len() as f32;
         let s1_options_vec: Vec<MoveNode> = s1_options
             .iter()
             .map(|x| MoveNode {
                 move_choice: x.clone(),
                 total_score: 0.0,
                 visits: 0,
+                prior: 1.0 / n_s1,  // uniform prior
             })
             .collect();
         let s2_options_vec: Vec<MoveNode> = s2_options
@@ -61,6 +66,7 @@ impl Node {
                 move_choice: x.clone(),
                 total_score: 0.0,
                 visits: 0,
+                prior: 1.0 / n_s2,  // uniform prior
             })
             .collect();
 
@@ -68,13 +74,50 @@ impl Node {
         self.s2_options = Some(s2_options_vec);
     }
 
-    pub fn maximize_ucb_for_side(&self, side_map: &[MoveNode]) -> usize {
+    unsafe fn populate_with_priors(
+        &mut self,
+        s1_options: Vec<MoveChoice>,
+        s2_options: Vec<MoveChoice>,
+        s1_priors: &[f32],
+        s2_priors: &[f32],
+    ) {
+        let s1_options_vec: Vec<MoveNode> = s1_options
+            .iter()
+            .enumerate()
+            .map(|(i, x)| MoveNode {
+                move_choice: x.clone(),
+                total_score: 0.0,
+                visits: 0,
+                prior: if i < s1_priors.len() { s1_priors[i] } else { 1.0 / s1_options.len() as f32 },
+            })
+            .collect();
+        let n_s2 = s2_options.len() as f32;
+        let s2_options_vec: Vec<MoveNode> = s2_options
+            .iter()
+            .enumerate()
+            .map(|(i, x)| MoveNode {
+                move_choice: x.clone(),
+                total_score: 0.0,
+                visits: 0,
+                prior: if i < s2_priors.len() { s2_priors[i] } else { 1.0 / n_s2 },
+            })
+            .collect();
+
+        self.s1_options = Some(s1_options_vec);
+        self.s2_options = Some(s2_options_vec);
+    }
+
+    pub fn maximize_ucb_for_side(&self, side_map: &[MoveNode], use_priors: bool) -> usize {
         let mut choice = 0;
-        let mut best_ucb1 = f32::MIN;
+        let mut best_score = f32::MIN;
         for (index, node) in side_map.iter().enumerate() {
-            let this_ucb1 = node.ucb1(self.times_visited);
-            if this_ucb1 > best_ucb1 {
-                best_ucb1 = this_ucb1;
+            let score = if use_priors {
+                node.puct(self.times_visited)
+            } else {
+                node.ucb1(self.times_visited)
+            };
+            if score > best_score {
+                best_score = score;
                 choice = index;
             }
         }
@@ -88,8 +131,9 @@ impl Node {
             self.populate(s1_options, s2_options);
         }
 
-        let s1_mc_index = self.maximize_ucb_for_side(&self.s1_options.as_ref().unwrap());
-        let s2_mc_index = self.maximize_ucb_for_side(&self.s2_options.as_ref().unwrap());
+        let use_p = self.use_priors;
+        let s1_mc_index = self.maximize_ucb_for_side(&self.s1_options.as_ref().unwrap(), use_p);
+        let s2_mc_index = self.maximize_ucb_for_side(&self.s2_options.as_ref().unwrap(), use_p);
         let child_vector = self.children.get_mut(&(s1_mc_index, s2_mc_index));
         match child_vector {
             Some(child_vector) => {
@@ -191,6 +235,7 @@ pub struct MoveNode {
     pub move_choice: MoveChoice,
     pub total_score: f32,
     pub visits: u32,
+    pub prior: f32,
 }
 
 impl MoveNode {
@@ -202,6 +247,19 @@ impl MoveNode {
             + (2.0 * (parent_visits as f32).ln() / self.visits as f32).sqrt();
         score
     }
+
+    /// PUCT selection: uses prior probability to guide exploration.
+    /// With uniform priors (all equal), this reduces to standard UCB1.
+    pub fn puct(&self, parent_visits: u32) -> f32 {
+        let c = 2.0;
+        let q = if self.visits == 0 {
+            0.5  // optimistic init
+        } else {
+            self.total_score / self.visits as f32
+        };
+        q + c * self.prior * (parent_visits as f32).sqrt() / (1.0 + self.visits as f32)
+    }
+
     pub fn average_score(&self) -> f32 {
         let score = self.total_score / self.visits as f32;
         score
@@ -269,6 +327,64 @@ pub fn perform_mcts(
         I can push the problem farther out by using f64 but if the bot is running for 10 million iterations
         then it almost certainly sees a forced win
         */
+        if root_node.times_visited == 10_000_000 {
+            break;
+        }
+    }
+
+    let result = MctsResult {
+        s1: root_node
+            .s1_options
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|v| MctsSideResult {
+                move_choice: v.move_choice.clone(),
+                total_score: v.total_score,
+                visits: v.visits,
+            })
+            .collect(),
+        s2: root_node
+            .s2_options
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|v| MctsSideResult {
+                move_choice: v.move_choice.clone(),
+                total_score: v.total_score,
+                visits: v.visits,
+            })
+            .collect(),
+        iteration_count: root_node.times_visited,
+    };
+
+    result
+}
+
+/// MCTS with policy net priors (PUCT selection).
+pub fn perform_mcts_with_priors(
+    state: &mut State,
+    side_one_options: Vec<MoveChoice>,
+    side_two_options: Vec<MoveChoice>,
+    s1_priors: &[f32],
+    s2_priors: &[f32],
+    max_time: Duration,
+) -> MctsResult {
+    let mut root_node = Node::new();
+    unsafe {
+        root_node.populate_with_priors(
+            side_one_options, side_two_options, s1_priors, s2_priors,
+        );
+    }
+    root_node.root = true;
+    root_node.use_priors = true;
+
+    let root_eval = evaluate(state);
+    let start_time = std::time::Instant::now();
+    while start_time.elapsed() < max_time {
+        for _ in 0..1000 {
+            do_mcts(&mut root_node, state, &root_eval);
+        }
         if root_node.times_visited == 10_000_000 {
             break;
         }
