@@ -1139,7 +1139,7 @@ fn run_games_recorded(
     s1_search_ms: u64,
     s2_search_ms: u64,
     max_turns: u32,
-) -> PyResult<Vec<(f32, Vec<(String, String, Vec<(String, u32)>, String)>)>> {
+) -> PyResult<Vec<(f32, Vec<(String, String, Vec<(String, u32)>, String, Vec<(String, u32)>)>)>> {
     let state: State = py_state.into();
     let results = play_games_recorded(&state, n_games, s1_search_ms, s2_search_ms, max_turns);
 
@@ -1149,7 +1149,7 @@ fn run_games_recorded(
             let turns: Vec<_> = r
                 .turns
                 .into_iter()
-                .map(|t| (t.state_string, t.s1_move, t.s1_visits, t.s2_move))
+                .map(|t| (t.state_string, t.s1_move, t.s1_visits, t.s2_move, t.s2_visits))
                 .collect();
             (r.winner, turns)
         })

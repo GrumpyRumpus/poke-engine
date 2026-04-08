@@ -14,3 +14,4 @@ poke-engine = { path = "../" }
 
 [features]
 default = ["poke-engine/gen4"]
+gen2 = ["poke-engine/gen2"]
