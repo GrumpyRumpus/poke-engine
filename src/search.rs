@@ -1,11 +1,51 @@
+use crate::choices::{MoveCategory, MOVES};
+use crate::engine::damage_calc::type_effectiveness_modifier;
 use crate::engine::evaluate::evaluate;
 use crate::engine::generate_instructions::generate_instructions_from_move_pair;
 use crate::engine::state::MoveChoice;
-use crate::state::State;
+use crate::state::{PokemonMoveIndex, State};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
+/// Reorder moves so type-immune attacking moves go to the back.
+/// This helps alpha-beta prune them early since they'll score poorly.
+fn deprioritize_immune_moves(options: Vec<MoveChoice>, state: &State, is_side_one: bool) -> Vec<MoveChoice> {
+    let (attacker_side, defender_side) = if is_side_one {
+        (&state.side_one, &state.side_two)
+    } else {
+        (&state.side_two, &state.side_one)
+    };
+
+    let attacker = &attacker_side.pokemon[attacker_side.active_index];
+    let defender = &defender_side.pokemon[defender_side.active_index];
+
+    let mut good = Vec::new();
+    let mut bad = Vec::new();
+
+    for opt in options {
+        let is_immune = match &opt {
+            MoveChoice::Move(move_idx) => {
+                let mv = &attacker.moves[move_idx];
+                if let Some(choice) = MOVES.get(&mv.id) {
+                    if choice.category != MoveCategory::Status && choice.base_power > 0.0 {
+                        type_effectiveness_modifier(&choice.move_type, defender) == 0.0
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+        if is_immune { bad.push(opt); } else { good.push(opt); }
+    }
+
+    good.extend(bad);
+    good
+}
 
 enum IterativeDeependingThreadMessage {
     Stop((Vec<MoveChoice>, Vec<MoveChoice>, Vec<f32>, i8)),
@@ -165,6 +205,10 @@ pub fn iterative_deepen_expectiminimax(
     max_time: Duration,
 ) -> (Vec<MoveChoice>, Vec<MoveChoice>, Vec<f32>, i8) {
     let mut state_clone = state.clone();
+
+    // deprioritize type-immune moves so alpha-beta prunes them fast
+    let side_one_options = deprioritize_immune_moves(side_one_options, state, true);
+    let side_two_options = deprioritize_immune_moves(side_two_options, state, false);
 
     let mut result = expectiminimax_search(
         state,

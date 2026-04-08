@@ -1,3 +1,4 @@
+use super::damage_calc::type_effectiveness_modifier;
 use super::items::Items;
 use super::state::PokemonVolatileStatus;
 use crate::choices::MoveCategory;
@@ -89,6 +90,27 @@ fn has_sleep_talk(pokemon: &Pokemon) -> bool {
     false
 }
 
+/// How well can this pokemon's physical/special moves hit the defender?
+/// Returns (physical_threat, special_threat) in [0.0, 1.0] range.
+/// 0.0 = all moves immune, 1.0 = at least one move is super effective.
+fn threat_vs(attacker: &Pokemon, defender: &Pokemon) -> (f32, f32) {
+    let mut best_phys: f32 = 0.0;
+    let mut best_spec: f32 = 0.0;
+
+    for mv in attacker.moves.into_iter() {
+        if mv.id == crate::choices::Choices::NONE { continue; }
+        let eff = type_effectiveness_modifier(&mv.choice.move_type, defender);
+        match mv.choice.category {
+            MoveCategory::Physical => best_phys = best_phys.max(eff),
+            MoveCategory::Special => best_spec = best_spec.max(eff),
+            _ => {}
+        }
+    }
+
+    // cap at 1.0 (super effective = full value, anything beyond is bonus but not needed)
+    (best_phys.min(1.0), best_spec.min(1.0))
+}
+
 fn evaluate_pokemon(pokemon: &Pokemon) -> f32 {
     let mut score = 0.0;
     score += POKEMON_HP * pokemon.hp as f32 / pokemon.maxhp as f32;
@@ -128,6 +150,14 @@ pub fn evaluate(state: &State) -> f32 {
     let mut side_one_alive_count: f32 = 0.0;
     let mut side_two_alive_count: f32 = 0.0;
 
+    // get active pokemon for matchup-aware boost evaluation
+    let s1_active = &state.side_one.pokemon[state.side_one.active_index];
+    let s2_active = &state.side_two.pokemon[state.side_two.active_index];
+
+    // how well can each side's moves hit the other?
+    let (s1_phys_threat, s1_spec_threat) = threat_vs(s1_active, s2_active);
+    let (s2_phys_threat, s2_spec_threat) = threat_vs(s2_active, s1_active);
+
     let mut iter = state.side_one.pokemon.into_iter();
     while let Some(pkmn) = iter.next() {
         if pkmn.hp > 0 {
@@ -142,10 +172,12 @@ pub fn evaluate(state: &State) -> f32 {
                         _ => {}
                     }
                 }
-                score += get_boost_multiplier(state.side_one.attack_boost) * POKEMON_ATTACK_BOOST;
+                // attack boosts only matter if we can hit the opponent
+                score += get_boost_multiplier(state.side_one.attack_boost)
+                    * POKEMON_ATTACK_BOOST * s1_phys_threat;
                 score += get_boost_multiplier(state.side_one.defense_boost) * POKEMON_DEFENSE_BOOST;
                 score += get_boost_multiplier(state.side_one.special_attack_boost)
-                    * POKEMON_SPECIAL_ATTACK_BOOST;
+                    * POKEMON_SPECIAL_ATTACK_BOOST * s1_spec_threat;
                 score += get_boost_multiplier(state.side_one.special_defense_boost)
                     * POKEMON_SPECIAL_DEFENSE_BOOST;
                 score += get_boost_multiplier(state.side_one.speed_boost) * POKEMON_SPEED_BOOST;
@@ -167,10 +199,11 @@ pub fn evaluate(state: &State) -> f32 {
                         _ => {}
                     }
                 }
-                score -= get_boost_multiplier(state.side_two.attack_boost) * POKEMON_ATTACK_BOOST;
+                score -= get_boost_multiplier(state.side_two.attack_boost)
+                    * POKEMON_ATTACK_BOOST * s2_phys_threat;
                 score -= get_boost_multiplier(state.side_two.defense_boost) * POKEMON_DEFENSE_BOOST;
                 score -= get_boost_multiplier(state.side_two.special_attack_boost)
-                    * POKEMON_SPECIAL_ATTACK_BOOST;
+                    * POKEMON_SPECIAL_ATTACK_BOOST * s2_spec_threat;
                 score -= get_boost_multiplier(state.side_two.special_defense_boost)
                     * POKEMON_SPECIAL_DEFENSE_BOOST;
                 score -= get_boost_multiplier(state.side_two.speed_boost) * POKEMON_SPEED_BOOST;
