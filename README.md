@@ -1,172 +1,116 @@
-# Poke Engine
+# Poke Engine (Fork)
 
-An engine for searching through Pokémon battles (singles only).
+A fork of [pmariglia/poke-engine](https://github.com/pmariglia/poke-engine) -- a Rust engine for searching through competitive Pokemon battles (singles).
 
-**This is not a perfect engine**
+This fork adds neural network policy integration, an improved evaluation function, and a full game simulation driver, focused on Gen 2 OU.
 
-This battle engine is meant to capture important aspects of Pokémon for the purposes of competitive single battles.
-It is nowhere near as complete or robust as the [PokemonShowdown](https://github.com/smogon/pokemon-showdown) battle engine.
+## What's Added
+
+### Policy Module (`src/policy.rs`)
+
+ONNX-based neural network inference for guiding MCTS search, gated behind the `policy` Cargo feature.
+
+- **579-dimensional feature extraction** from game state: active move properties (type, power, accuracy, STAB, effectiveness, effect flags), per-pokemon stats with boost application, side conditions, weather
+- **PolicyNet**: loads an ONNX model, produces move priors via softmax with configurable temperature scaling
+- **ValueNet**: loads an ONNX model, predicts win probability from position (sigmoid output)
+- **PUCT selection** in MCTS: AlphaZero-style prior integration where policy network outputs bias the UCB exploration term
+
+```rust
+let policy = PolicyNet::load("model.onnx")?;
+// or with temperature to soften confident priors:
+let policy = PolicyNet::with_temperature("model.onnx", 5.0)?;
+
+let (s1_priors, s2_priors) = policy.get_priors(&state, &s1_options, &s2_options);
+```
+
+### Evaluation Improvements (`src/gen2/evaluate.rs`)
+
+- **Matchup-aware boost scoring**: attack/special attack boost values are multiplied by `threat_vs()`, which checks whether the boosted Pokemon's physical/special moves can actually hit the current defender. Fixes overvaluing boosts in immune matchups (e.g., Snorlax Curse boosts vs Ghost types).
+- **Sleep Talk awareness**: sleep penalty reduced by 60% for Pokemon carrying Sleep Talk
+
+### Search Improvements (`src/search.rs`)
+
+- **Immune move deprioritization**: attacking moves that deal 0 damage to the defender's type are pushed to the back of the move list for alpha-beta ordering, allowing faster pruning of dead branches
+
+### Game Driver (`src/game.rs`)
+
+Full game simulation framework for running MCTS vs MCTS games:
+
+- `play_game()` / `play_games()`: run games with configurable search times per side, parallelized with rayon
+- `play_game_recorded()`: captures per-turn state strings and visit distributions for both sides, producing training data for policy networks
+- `play_game_with_policy()`: policy-guided MCTS (PUCT priors) vs standard MCTS
+- `play_game_with_policy_and_value()`: full AlphaZero-style search with policy priors + value net leaf evaluation
+
+### MCTS Extensions (`src/mcts.rs`)
+
+- `mcts_with_priors()`: PUCT selection using policy network priors
+- `perform_mcts_with_priors()`: top-level MCTS with policy integration
+- `mcts_multi()`: root-parallel MCTS over multiple sampled opponent team states
+- `do_mcts_with_value_net()`: value network leaf evaluation (replaces handcrafted eval)
+
+### Benchmark Examples (`examples/`)
+
+- `cross_team_bench.rs`: parallel cross-team winrate matrix (policy MCTS vs standard MCTS)
+- `expectiminimax_bench.rs`: EMM vs MCTS comparison across team matchups
+- `policy_benchmark.rs`: policy-guided vs standard MCTS in mirror matches
+- `value_bench.rs`: policy + value net vs standard MCTS
+
+## Building
+
+Requires Rust / Cargo. Features are used to select the Pokemon generation:
+
+```shell
+# standard build (e.g., gen2)
+cargo build --release --features gen2
+
+# with neural network policy support
+cargo build --release --features gen2,policy
+```
+
+The `policy` feature pulls in [ort](https://github.com/pykeio/ort) (ONNX Runtime bindings) for model inference.
 
 ## Links
 
-#### [Python Bindings](poke-engine-py)
+- [Upstream repository](https://github.com/pmariglia/poke-engine)
+- [Python Bindings](poke-engine-py)
+- [CHANGELOG](CHANGELOG.md)
 
-#### [CHANGELOG](CHANGELOG.md)
+## Usage
 
-## Running Directly
+The engine can be used through several subcommands:
 
-### Building
+| Subcommand | Description |
+|---|---|
+| `generate-instructions` | Generate possible state transitions for a move pair |
+| `expectiminimax` | Fixed-depth expectiminimax search with alpha-beta pruning |
+| `iterative-deepening` | Time-limited iterative deepening expectiminimax |
+| `monte-carlo-tree-search` | Time-limited MCTS |
+| `calculate-damage` | Damage roll calculation |
+| (no subcommand) | Interactive mode |
 
-Make sure you have Rust / Cargo installed.
+### Interactive Mode
 
-[Features](https://doc.rust-lang.org/cargo/reference/features.html) are used to conditionally compile code for different generations of Pokemon.
-The simplest way to build the project is with the Makefile.
-
-e.g. To build for generation 4:
-
-```shell
-make gen4
-```
-
-Run with
-    
-```shell
-./target/release/poke-engine
-```
-
-Generations 4 through 8 are available
-
-### Usage
-
-There are several ways to interact with the engine through subcommands:
-
-1. **Generate Instructions**
-```shell
-poke-engine generate-instructions --state <state-string> -o <s1_move> -t <s2_move>
-```
-Generate and display the different Instructions that could be applied to the state if side 1 and side 2 used the given moves.
-
-e.g.
-```shell
-poke-engine generate-instructions --state <state-string> -o shadowball -t breloom
-```
-```
-Index: 0
-StateInstruction: 
-	Percentage: 80.00
-	Instructions:
-		Switch SideTwo: P0 -> P2
-		Damage SideTwo: 184
-
-Index: 1
-StateInstruction: 
-	Percentage: 20.00
-	Instructions:
-		Switch SideTwo: P0 -> P2
-		Damage SideTwo: 184
-		Boost SideTwo SpecialDefense: -1
-```
-
-2. **Expectiminimax**
-```shell
-poke-engine expectiminimax --state <state-string> --depth <depth> [--ab-prune]
-```
-Search through the state using [expectiminimax](https://en.wikipedia.org/wiki/Expectiminimax) to the given depth.
-Displays the results along with the best move found.
-
-e.g.
-```shell
-poke-engine expectiminimax --state <state-string> -d 3
-```
-```
-side one options: psychic,grassknot,shadowball,hiddenpowerfire70,switch skarmory,switch tyranitar,switch mamoswine,switch jellicent,switch excadrill
-side two options: closecombat,stoneedge,stealthrock,taunt,xscissor,quickattack,switch lucario,switch breloom,switch keldeo,switch conkeldurr,switch toxicroak
-matrix: 32.39,11.99,39.72,99.72,-9.94,69.44,55.46,75.91,75.91,75.91,101.19,32.39,-2.94,39.72,99.72,-28.60,69.44,53.51,79.84,108.92,78.63,-23.62,32.39,-20.35,34.37,94.37,-49.04,49.60,53.51,81.39,88.49,89.01,0.00,17.65,-43.57,11.15,71.15,-72.26,26.38,75.91,75.91,65.27,83.70,0.00,-76.18,-85.66,-72.00,-36.99,-34.19,-34.19,-50.07,-11.07,-25.16,-31.11,15.53,-119.69,-85.88,-101.20,-29.40,-100.00,-82.60,-90.04,-107.86,-77.15,-73.11,-25.90,-100.00,-95.17,-118.42,-75.85,-86.53,-86.53,-97.97,-102.52,-83.18,-74.85,-44.47,-45.01,-74.53,-117.55,-45.01,-56.64,-45.01,-84.08,-120.08,-45.01,-74.85,-44.47,-100.00,-47.20,-96.28,-32.62,-52.23,-42.56,-41.19,-120.08,-74.58,-74.85,-41.19
-choice: psychic
-evaluation: -9.944763
-````
-
-3. **Iterative Deepening**
-```shell
-poke-engine iterative-deepening --state <state-string> --time-to-search-ms <time>
-```
-Similar to expectiminimax, search through the state but use iterative deepening.
-Searches for the given amount of time, then returns the best move found.
-
-e.g.
-```shell
-poke-engine iterative-deepening --state <state-string> -t 100
-```
-```
-side one options: psychic,switch jellicent,grassknot,shadowball,hiddenpowerfire70,switch skarmory,switch mamoswine,switch excadrill,switch tyranitar
-side two options: closecombat,stoneedge,stealthrock,taunt,xscissor,quickattack,switch lucario,switch breloom,switch keldeo,switch conkeldurr,switch toxicroak
-matrix: 32.39,11.99,39.72,99.72,-9.94,69.44,55.46,75.91,75.91,75.91,101.19,-45.01,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,32.39,-2.94,39.72,99.72,-28.60,NaN,NaN,NaN,NaN,NaN,NaN,32.39,-20.35,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,17.65,-43.57,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,-76.18,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,-100.00,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,-100.00,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,-119.69,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN,NaN
-choice: psychic
-evaluation: -9.944763
-```
-
-4. **Monte Carlo Tree Search**
-```shell
-poke-engine monte-carlo-tree-search --state <state-string> --time-to-search-ms <time>
-```
-Search through the state using [Monte Carlo Tree Search](https://en.wikipedia.org/wiki/Monte_Carlo_tree_search) for the given amount of time.
-
-e.g.
-```shell
-poke-engine monte-carlo-tree-search --state <state-string> -t 100
-```
-```
-Total Iterations: 25000
-side one: switch mamoswine,115.31,300|switch tyranitar,41.00,123|hiddenpowerfire70,58.14,165|switch jellicent,1067.52,2402|switch excadrill,3754.58,8173|shadowball,115.37,300|grassknot,298.20,715|psychic,4038.05,8780|switch skarmory,1826.44,4042
-side two: stoneedge,915.55,1723|switch lucario,70.53,159|closecombat,827.19,1562|switch breloom,181.84,373|switch keldeo,141.66,297|stealthrock,413.54,805|quickattack,84.78,187|taunt,123.90,263|xscissor,10745.95,19240|switch conkeldurr,153.71,320|switch toxicroak,26.94,71
-```
-
-5. **Calculate Damage**
-```shell
-poke-engine calculate-damage --state <state-string> -o <s1_move> -t <s2_move>
-```
-Calculate the damage rolls for the given moves.
-
-e.g.
-```shell
-poke-engine calculate-damage --state <state-string> -o shadowball -t closecombat
-```
-```
-Damage Rolls: 122,123,125,126,128,129,131,132,133,135,136,138,139,141,142,144
-Damage Rolls: 155,157,159,161,162,164,166,168,170,172,173,175,177,179,181,183
-```
-
-6. **Interactive Mode**: Run the engine and input commands directly
-
-e.g.
 ```shell
 poke-engine --state <state-string>
 ```
 
-Available commands:
-
-| Command                                               | Shorthand | Function                                                                                                      |
-|-------------------------------------------------------|:---------:|---------------------------------------------------------------------------------------------------------------|
-| **state** *state-string*                              |     s     | Reset the state to *state-string*                                                                             |
-| **matchup**                                           |     m     | Display some information about the current state                                                              |
-| **generate-instructions** *side-1-move* *side-2-move* |     g     | Generate all of the instructions that would be applied to the state if side 1 and side 2 used the given moves |
-| **instructions**                                      |     i     | Display the last instructions generated by **generate-instructions**                                          |
-| **apply** *instruction-index*                         |     a     | Apply the last instructions instructions to the state, modifying it                                           |
-| **pop**                                               |     p     | Pops the last instructions from the state, undoing their changes                                              |
-| **pop-all**                                           |    pa     | Pops all applied instructions from the state                                                                  |
-| **evaluate**                                          |    ev     | Calculate the current state's evaluation                                                                      |
-| **calculate-damage** *side-1-move* *side-2-move*      |     d     | Calculate the damage rolls for the given moves                                                                |
-| **expectiminimax** *depth* *[ab-prune=false]*         |     e     | Perform expectiminimax (see above), and display the results                                                   |
-| **iterative-deepening** *time-ms*                     |    id     | Perform iterative-deepening (see above), and display the results                                              |
-| **monte-carlo-tree-search** *time-ms*                 |   mcts    | Perform monte-carlo-tree-search (see above), and display the results                                          |
-| **serialize**                                         |    ser    | Display the current state's serialized string                                                                 |
-| **exit/quit**                                         |     q     | Quit interactive mode                                                                                         |
-
+| Command | Short | Description |
+|---|:-:|---|
+| **state** *str* | s | Reset state |
+| **matchup** | m | Display current state info |
+| **generate-instructions** *s1* *s2* | g | Generate instructions for move pair |
+| **instructions** | i | Show last generated instructions |
+| **apply** *index* | a | Apply instructions to state |
+| **pop** | p | Undo last applied instructions |
+| **pop-all** | pa | Undo all applied instructions |
+| **evaluate** | ev | Evaluate current position |
+| **calculate-damage** *s1* *s2* | d | Calculate damage rolls |
+| **expectiminimax** *depth* *[ab]* | e | Run expectiminimax search |
+| **iterative-deepening** *ms* | id | Run iterative deepening search |
+| **monte-carlo-tree-search** *ms* | mcts | Run MCTS |
+| **serialize** | ser | Print serialized state string |
+| **exit/quit** | q | Quit |
 
 ### State Representation
 
-When running directly, the engine parses the state of the game from a string.
-
-Properly representing the state of a Pokémon battle gets really complicated.
-See the doctest for `State::deserialize` in [state.rs](src/state.rs)
-for the source of truth on how to parse a state string.
+See the doctest for `State::deserialize` in [state.rs](src/state.rs) for the state string format.
