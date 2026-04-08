@@ -22,6 +22,7 @@ debug = 1
 clap = { version = "4.5.4", features = ["derive"] }
 rand = "0.9.1"
 rayon = "1.10"
+ort = { version = "2.0.0-rc.12", optional = true }
 
 [features]
 remove_low_chance_instructions = []
@@ -35,6 +36,8 @@ gen7 = []
 gen8 = []
 gen9 = []
 terastallization = ["gen9"]
+
+policy = ["ort"]
 
 default = []
 

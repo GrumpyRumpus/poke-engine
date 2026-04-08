@@ -296,6 +296,26 @@ fn do_mcts(root_node: &mut Node, state: &mut State, root_eval: &f32) {
     unsafe { (*new_node).backpropagate(rollout_result, state) }
 }
 
+#[cfg(feature = "policy")]
+fn do_mcts_with_value_net(
+    root_node: &mut Node,
+    state: &mut State,
+    value_net: &crate::policy::ValueNet,
+) {
+    let (mut new_node, s1_move, s2_move) = unsafe { root_node.selection(state) };
+    new_node = unsafe { (*new_node).expand(state, s1_move, s2_move) };
+    // use value net instead of handcrafted eval
+    let battle_is_over = state.battle_is_over();
+    let rollout_result = if battle_is_over == 0.0 {
+        value_net.evaluate(state)
+    } else if battle_is_over == -1.0 {
+        0.0
+    } else {
+        battle_is_over
+    };
+    unsafe { (*new_node).backpropagate(rollout_result, state) }
+}
+
 pub fn perform_mcts(
     state: &mut State,
     side_one_options: Vec<MoveChoice>,
@@ -494,4 +514,59 @@ pub fn perform_mcts_multi(
     };
 
     result
+}
+
+/// MCTS with value network for leaf evaluation.
+/// Optionally also takes policy priors for PUCT selection.
+#[cfg(feature = "policy")]
+pub fn perform_mcts_with_value(
+    state: &mut State,
+    side_one_options: Vec<MoveChoice>,
+    side_two_options: Vec<MoveChoice>,
+    s1_priors: Option<&[f32]>,
+    s2_priors: Option<&[f32]>,
+    value_net: &crate::policy::ValueNet,
+    max_time: Duration,
+) -> MctsResult {
+    let mut root_node = Node::new();
+
+    if let (Some(s1p), Some(s2p)) = (s1_priors, s2_priors) {
+        unsafe {
+            root_node.populate_with_priors(
+                side_one_options, side_two_options, s1p, s2p,
+            );
+        }
+        root_node.use_priors = true;
+    } else {
+        unsafe {
+            root_node.populate(side_one_options, side_two_options);
+        }
+    }
+    root_node.root = true;
+
+    let start_time = std::time::Instant::now();
+    while start_time.elapsed() < max_time {
+        for _ in 0..1000 {
+            do_mcts_with_value_net(&mut root_node, state, value_net);
+        }
+        if root_node.times_visited == 10_000_000 {
+            break;
+        }
+    }
+
+    MctsResult {
+        s1: root_node.s1_options.as_ref().unwrap().iter()
+            .map(|v| MctsSideResult {
+                move_choice: v.move_choice.clone(),
+                total_score: v.total_score,
+                visits: v.visits,
+            }).collect(),
+        s2: root_node.s2_options.as_ref().unwrap().iter()
+            .map(|v| MctsSideResult {
+                move_choice: v.move_choice.clone(),
+                total_score: v.total_score,
+                visits: v.visits,
+            }).collect(),
+        iteration_count: root_node.times_visited,
+    }
 }
